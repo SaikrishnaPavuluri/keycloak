@@ -160,7 +160,7 @@ public class GroupResourceTypeEvaluationTest extends AbstractPermissionTest {
 
         //create all-groups permission for "myadmin" (so that myadmin can manage all groups in the realm)
         UserPolicyRepresentation policy = createUserPolicy(realm, client, "Only My Admin User Policy", realm.admin().users().search("myadmin").get(0).getId());
-        createAllGroupsPermission(policy, Set.of(MANAGE));
+        createAllGroupsPermission(policy, Set.of(VIEW, MANAGE));
 
         // creating group requires manage scope
         GroupRepresentation group = new GroupRepresentation();
@@ -203,7 +203,7 @@ public class GroupResourceTypeEvaluationTest extends AbstractPermissionTest {
 
         //create group permission for "myadmin" to manage the myGroup
         UserPolicyRepresentation policy = createUserPolicy(realm, client, "Only My Admin User Policy", realm.admin().users().search("myadmin").get(0).getId());
-        createGroupPermission(myGroup, Set.of(MANAGE), policy);
+        createGroupPermission(myGroup, Set.of(VIEW, MANAGE), policy);
 
         // myadmin shouldn't be able to update the topGroup
         try {
@@ -307,6 +307,25 @@ public class GroupResourceTypeEvaluationTest extends AbstractPermissionTest {
 
         //check myadmin can manage membership
         realmAdminClient.realm(realm.getName()).users().get(bobId).joinGroup(topGroup.getId());
+    }
+
+    @Test
+    public void testCreateGroupMembers() {
+        //create group permission for "topGroup" to allow "myadmin" view, manage-members and manage-membership
+        UserPolicyRepresentation policy = createUserPolicy(realm, client, "Only My Admin User Policy", realm.admin().users().search("myadmin").get(0).getId());
+        createGroupPermission(topGroup, Set.of(VIEW, MANAGE_MEMBERSHIP, MANAGE_MEMBERS), policy);
+        
+        //create new user as realm user should fail
+        try (Response response = realmAdminClient.realm(realm.getName()).users().create(UserConfigBuilder.create().username("bob").build())) {
+            assertThat(response.getStatus(), equalTo(Response.Status.FORBIDDEN.getStatusCode()));
+        }
+        //create new user as member of different group should fail
+        try (Response response = realmAdminClient.realm(realm.getName()).users().create(UserConfigBuilder.create().username("bob").groups("different_group").build())) {
+            assertThat(response.getStatus(), equalTo(Response.Status.FORBIDDEN.getStatusCode()));
+        }
+
+        String bobId = ApiUtil.handleCreatedResponse(realmAdminClient.realm(realm.getName()).users().create(UserConfigBuilder.create().username("bob").groups("/" + groupName).build()));
+        realm.cleanup().add(r -> r.users().delete(bobId));
     }
 
     @Test

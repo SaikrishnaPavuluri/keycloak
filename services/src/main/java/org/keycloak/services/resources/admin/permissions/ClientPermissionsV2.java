@@ -18,12 +18,12 @@ package org.keycloak.services.resources.admin.permissions;
 
 import static org.keycloak.authorization.AdminPermissionsSchema.CLIENTS_RESOURCE_TYPE;
 
-import org.jboss.logging.Logger;
 import org.keycloak.authorization.AdminPermissionsSchema;
 import org.keycloak.authorization.AuthorizationProvider;
 import org.keycloak.authorization.model.Policy;
 import org.keycloak.authorization.model.Resource;
 import org.keycloak.authorization.model.ResourceServer;
+import org.keycloak.authorization.model.ResourceWrapper;
 import org.keycloak.authorization.permission.ResourcePermission;
 import org.keycloak.models.AdminRoles;
 import org.keycloak.models.ClientModel;
@@ -34,7 +34,6 @@ import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.idm.authorization.Permission;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
@@ -44,11 +43,15 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+class ClientPermissionsV2 extends ClientPermissions {
 
-public class ClientPermissionsV2 extends ClientPermissions {
-
-    public ClientPermissionsV2(KeycloakSession session, RealmModel realm, AuthorizationProvider authz, MgmtPermissionsV2 root) {
+    ClientPermissionsV2(KeycloakSession session, RealmModel realm, AuthorizationProvider authz, MgmtPermissionsV2 root) {
         super(session, realm, authz, root);
+    }
+
+    @Override
+    public boolean canList() {
+        return root.hasOneAdminRole(AdminRoles.QUERY_CLIENTS) || canView();
     }
 
     @Override
@@ -67,21 +70,23 @@ public class ClientPermissionsV2 extends ClientPermissions {
 
     @Override
     public boolean canManage() {
-        return super.canManage() || hasPermission(AdminPermissionsSchema.MANAGE);
+        if (root.hasOneAdminRole(AdminRoles.MANAGE_CLIENTS)) return true;
+
+        return hasPermission(AdminPermissionsSchema.MANAGE);
     }
 
     @Override
     public boolean canView(ClientModel client) {
-        if (canView() || canConfigure(client)) {
-            return true;
-        }
+        if (root.hasOneAdminRole(AdminRoles.MANAGE_CLIENTS, AdminRoles.VIEW_CLIENTS)) return true;
 
         return hasPermission(client, AdminPermissionsSchema.VIEW);
     }
 
     @Override
     public boolean canView() {
-        return canViewClientDefault() || hasPermission(AdminPermissionsSchema.VIEW);
+        if (root.hasOneAdminRole(AdminRoles.MANAGE_CLIENTS, AdminRoles.VIEW_CLIENTS)) return true;
+
+        return hasPermission(AdminPermissionsSchema.VIEW);
     }
 
     @Override
@@ -115,7 +120,7 @@ public class ClientPermissionsV2 extends ClientPermissions {
     public boolean canView(ClientScopeModel clientScope) {
         if (root.hasOneAdminRole(AdminRoles.VIEW_CLIENTS, AdminRoles.MANAGE_CLIENTS)) return true;
 
-        return hasPermission(AdminPermissionsSchema.VIEW) || hasPermission(AdminPermissionsSchema.MANAGE);
+        return hasPermission(AdminPermissionsSchema.VIEW);
     }
 
     @Override
@@ -203,6 +208,10 @@ public class ClientPermissionsV2 extends ClientPermissions {
         throw new UnsupportedOperationException("Not supported in V2");
     }
 
+    private boolean hasPermission(String scope) {
+        return hasPermission(null, scope);
+    }
+
     private boolean hasPermission(ClientModel client, String scope) {
         if (!root.isAdminSameRealm()) {
             return false;
@@ -210,68 +219,23 @@ public class ClientPermissionsV2 extends ClientPermissions {
 
         ResourceServer server = root.realmResourceServer();
 
-        if (server == null) return false;
+        if (server == null) {
+            return false;
+        }
 
         String resourceType = CLIENTS_RESOURCE_TYPE;
+        Resource resourceTypeResource = AdminPermissionsSchema.SCHEMA.getResourceTypeResource(session, server, resourceType);
+        Resource resource = client == null ? resourceTypeResource : resourceStore.findByName(server, client.getId());
 
-        Resource resource =  resourceStore.findByName(server, client.getId(), server.getId());
-
-        if (resource == null) {
-            // check if there is permission for "all-clients". If so, load its resource and proceed with evaluation
-            resource = AdminPermissionsSchema.SCHEMA.getResourceTypeResource(session, server, resourceType);
-
-            if (authz.getStoreFactory().getPolicyStore().findByResource(server, resource).isEmpty()) {
-                return false;
-            }
+        if (client != null && resource == null) {
+            resource = new ResourceWrapper(client.getId(), client.getId(), new HashSet<>(resourceTypeResource.getScopes()), server);
         }
 
         Collection<Permission> permissions = root.evaluatePermission(new ResourcePermission(resourceType, resource, resource.getScopes(), server), server);
-        List<String> expectedScopes = Arrays.asList(scope);
 
         for (Permission permission : permissions) {
             if (permission.getResourceId().equals(resource.getId())) {
-                for (String s : permission.getScopes()) {
-                    if (expectedScopes.contains(s)) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private boolean hasPermission(String scope) {
-        if (!root.isAdminSameRealm()) {
-            return false;
-        }
-        ResourceServer server = root.realmResourceServer();
-        if (server == null) return false;
-
-        Resource resource = resourceStore.findByName(server, CLIENTS_RESOURCE_TYPE, server.getId());
-        if (resource == null) {
-            return false;
-        }
-
-        List<ResourcePermission> expected = new ArrayList<>();
-
-        if (policyStore.findByResource(server, resource).isEmpty()) {
-            // TODO: client scope permissions are evaluated based on any permission granted to any client in a realm
-            // this won't scale and instead we should just enforce access when actually mapping roles where the client is known
-            policyStore.findByResourceType(server, CLIENTS_RESOURCE_TYPE, policy -> {
-                for (Resource r : policy.getResources()) {
-                    expected.add(new ResourcePermission(CLIENTS_RESOURCE_TYPE, r, r.getScopes(), server));
-                }
-            });
-        } else {
-            expected.add(new ResourcePermission(CLIENTS_RESOURCE_TYPE, resource, resource.getScopes(), server));
-        }
-
-        Collection<Permission> permissions = root.evaluatePermission(expected, server);
-        List<String> expectedScopes = Arrays.asList(scope);
-        for (Permission permission : permissions) {
-            for (String s : permission.getScopes()) {
-                if (expectedScopes.contains(s)) {
+                if (permission.getScopes().contains(scope)) {
                     return true;
                 }
             }
