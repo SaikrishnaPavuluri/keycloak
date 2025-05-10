@@ -281,6 +281,7 @@ public class AdminPermissionsSchema extends AuthorizationSchema {
         }
 
         client = clients.addClient(realm, Constants.ADMIN_PERMISSIONS_CLIENT_ID);
+        client.setProtocol("openid-connect");
 
         realm.setAdminPermissionsClient(client);
 
@@ -308,7 +309,7 @@ public class AdminPermissionsSchema extends AuthorizationSchema {
     }
 
     public boolean isAdminPermissionsEnabled(RealmModel realm) {
-        return Profile.isFeatureEnabled(Profile.Feature.ADMIN_FINE_GRAINED_AUTHZ_V2) && realm.isAdminPermissionsEnabled();
+        return Profile.isFeatureEnabled(Profile.Feature.ADMIN_FINE_GRAINED_AUTHZ_V2) && realm != null && realm.isAdminPermissionsEnabled();
     }
 
     public AuthorizationSchema getAuthorizationSchema(ClientModel client) {
@@ -511,6 +512,20 @@ public class AdminPermissionsSchema extends AuthorizationSchema {
      * @see AdminPermissionsSchema#runWithoutAuthorization(KeycloakSession, Runnable)
      */
     public static boolean isSkipEvaluation(KeycloakSession session) {
-        return session == null || Boolean.parseBoolean(session.getAttributeOrDefault(SKIP_EVALUATION, Boolean.FALSE.toString()));
+        if (session == null) {
+            return true;
+        }
+
+        RealmModel realm = session.getContext().getRealm();
+
+        if (realm == null) {
+            return true;
+        }
+
+        if (!AdminPermissionsSchema.SCHEMA.isAdminPermissionsEnabled(realm)) {
+            return true;
+        }
+
+        return Boolean.parseBoolean(session.getAttributeOrDefault(SKIP_EVALUATION, Boolean.FALSE.toString()));
     }
 }
